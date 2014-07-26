@@ -90,16 +90,24 @@ static void
 v1d_dorange(struct req *req, const char *r)
 {
 	ssize_t len, low, high, has_low;
+	struct busyobj *bo;
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
 	CHECK_OBJ_NOTNULL(req->obj, OBJECT_MAGIC);
 	assert(http_GetStatus(req->obj->http) == 200);
 
 	/* We must snapshot the length if we're streaming from the backend */
-	if (req->obj->objcore->busyobj != NULL)
-		len = VBO_waitlen(req->obj->objcore->busyobj, -1);
+	if (req->obj->objcore->busyobj)
+		bo = HSH_RefBusy(req->obj->objcore);
 	else
+		bo = NULL;
+
+	if (bo != NULL) {
+		len = VBO_waitlen(bo, -1);
+		VBO_DerefBusyObj(req->wrk, &bo);
+	} else {
 		len = req->obj->len;
+	}
 
 	if (strncmp(r, "bytes=", 6))
 		return;
@@ -232,6 +240,7 @@ V1D_Deliver(struct req *req)
 {
 	char *r;
 	enum objiter_status ois;
+	struct busyobj *bo;
 
 	CHECK_OBJ_NOTNULL(req, REQ_MAGIC);
 	CHECK_OBJ_NOTNULL(req->obj, OBJECT_MAGIC);
@@ -247,28 +256,37 @@ V1D_Deliver(struct req *req)
 		req->res_mode &= ~RES_LEN;
 		http_Unset(req->resp, H_Content_Length);
 		req->wantbody = 0;
-	} else if (req->obj->objcore->busyobj == NULL) {
-		/* XXX: Not happy with this convoluted test */
-		req->res_mode |= RES_LEN;
-		if (!(req->obj->objcore->flags & OC_F_PASS) ||
-		    req->obj->len != 0) {
+	} else {
+		if (req->obj->objcore->busyobj)
+			bo = HSH_RefBusy(req->obj->objcore);
+		else
+			bo = NULL;
+
+		if (bo == NULL) {
+			/* XXX: Not happy with this convoluted test */
+			req->res_mode |= RES_LEN;
+			if (!(req->obj->objcore->flags & OC_F_PASS) ||
+			    req->obj->len != 0) {
+				http_Unset(req->resp, H_Content_Length);
+				http_PrintfHeader(req->resp,
+				    "Content-Length: %zd", req->obj->len);
+			}
+		} else if (bo->h_content_length && ! req->obj->changed_gzip) {
+			/*
+			 * streaming a backend object with C-L - trust the
+			 * backend - we will re-check the written bytes later
+			 * and close with SC_RESP_SHORT if they don't match
+			 */
+			req->res_mode |= RES_LEN;
 			http_Unset(req->resp, H_Content_Length);
 			http_PrintfHeader(req->resp,
-			    "Content-Length: %zd", req->obj->len);
+			    "Content-Length: %zd", bo->adv_len);
+			http_PrintfHeader(req->resp,
+			    "Content-Length-DEBUG-XXX: %zd", req->obj->len);
 		}
-	} else if (req->obj->objcore->busyobj->h_content_length &&
-		   ! req->obj->changed_gzip) {
-		/*
-		 * streaming a backend object with C-L - trust the backend - we
-		 * will re-check the written bytes later and close with
-		 * SC_RESP_SHORT if they don't match
-		 */
-		req->res_mode |= RES_LEN;
-		http_Unset(req->resp, H_Content_Length);
-		http_PrintfHeader(req->resp,
-		    "Content-Length: %zd", req->obj->objcore->busyobj->adv_len);
-		http_PrintfHeader(req->resp,
-		    "Content-Length-DEBUG-XXX: %zd", req->obj->len);
+
+		if (bo != NULL)
+			VBO_DerefBusyObj(req->wrk, &bo);
 	}
 
 	if (req->esi_level > 0) {

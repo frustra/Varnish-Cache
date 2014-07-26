@@ -1271,6 +1271,9 @@ struct storage *STV_alloc_transient(size_t size);
 void SMP_Init(void);
 void SMP_Ready(void);
 
+/* cache_hash.c */
+struct busyobj *HSH_RefBusy(const struct objcore *oc);
+
 /*
  * A normal pointer difference is signed, but we never want a negative value
  * so this little tool will make sure we don't get that.
