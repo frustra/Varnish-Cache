@@ -349,28 +349,39 @@ http_splitheader(struct http *hp, int req)
 
 
 /**********************************************************************
- * Receive another character
+ * Receive data
  */
 
 static int
 http_rxchar(struct http *hp, int n, int eof)
 {
 	int i;
+	int l = 0;
 	struct pollfd pfd[1];
+	int avail = hp->nrxbuf - hp->prxbuf - 1;
+
+	if (n == -1 || n > avail)
+		n = avail;
 
 	while (n > 0) {
 		pfd[0].fd = hp->fd;
 		pfd[0].events = POLLIN;
 		pfd[0].revents = 0;
 		i = poll(pfd, 1, hp->timeout);
-		if (i == 0)
+		if (i == 0) {
 			vtc_log(hp->vl, hp->fatal,
 			    "HTTP rx timeout (fd:%d %u ms)",
 			    hp->fd, hp->timeout);
-		if (i < 0)
+			return (0);
+		}
+
+		if (i < 0) {
 			vtc_log(hp->vl, hp->fatal,
 			    "HTTP rx failed (fd:%d poll: %s)",
 			    hp->fd, strerror(errno));
+			return (0);
+		}
+
 		assert(i > 0);
 		assert(hp->prxbuf + n < hp->nrxbuf);
 		i = read(hp->fd, hp->rxbuf + hp->prxbuf, n);
@@ -378,8 +389,10 @@ http_rxchar(struct http *hp, int n, int eof)
 			vtc_log(hp->vl, 4,
 			    "HTTP rx poll (fd:%d revents: %x n=%d, i=%d)",
 			    hp->fd, pfd[0].revents, n, i);
+
 		if (i == 0 && eof)
-			return (i);
+			return (l);
+
 		if (i == 0)
 			vtc_log(hp->vl, hp->fatal,
 			    "HTTP rx EOF (fd:%d read: %s)",
@@ -388,11 +401,16 @@ http_rxchar(struct http *hp, int n, int eof)
 			vtc_log(hp->vl, hp->fatal,
 			    "HTTP rx failed (fd:%d read: %s)",
 			    hp->fd, strerror(errno));
+
+		if (i <= 0)
+			return (l);
+
 		hp->prxbuf += i;
 		hp->rxbuf[hp->prxbuf] = '\0';
 		n -= i;
+		l += i;
 	}
-	return (1);
+	return (l);
 }
 
 static int
@@ -403,7 +421,7 @@ http_rxchunk(struct http *hp)
 
 	l = hp->prxbuf;
 	do
-		(void)http_rxchar(hp, 1, 0);
+		assert(http_rxchar(hp, 1, 0) == 1);
 	while (hp->rxbuf[hp->prxbuf - 1] != '\n');
 	vtc_dump(hp->vl, 4, "len", hp->rxbuf + l, -1);
 	i = strtoul(hp->rxbuf + l, &q, 16);
@@ -417,12 +435,12 @@ http_rxchunk(struct http *hp)
 	assert(*q == '\0' || vct_islws(*q));
 	hp->prxbuf = l;
 	if (i > 0) {
-		(void)http_rxchar(hp, i, 0);
+		i = http_rxchar(hp, i, 0);
 		vtc_dump(hp->vl, 4, "chunk",
 		    hp->rxbuf + l, i);
 	}
 	l = hp->prxbuf;
-	(void)http_rxchar(hp, 2, 0);
+	assert(http_rxchar(hp, 2, 0) == 2);
 	if(!vct_iscrlf(hp->rxbuf + l))
 		vtc_log(hp->vl, hp->fatal,
 		    "Wrong chunk tail[0] = %02x",
@@ -438,23 +456,32 @@ http_rxchunk(struct http *hp)
 
 /**********************************************************************
  * Swallow a HTTP message body
+ *
+ * if the body does not fit into rxbuf, bp->body will point to the last
+ * received buffer
  */
 
 static void
 http_swallow_body(struct http *hp, char * const *hh, int body)
 {
 	char *p;
-	int i, l, ll;
+	int i, l, ll, oprxbuf;
 
 	ll = 0;
 	p = http_find_header(hh, "content-length");
 	if (p != NULL) {
 		hp->body = hp->rxbuf + hp->prxbuf;
 		l = strtoul(p, NULL, 0);
-		(void)http_rxchar(hp, l, 0);
-		vtc_dump(hp->vl, 4, "body", hp->body, l);
-		hp->bodyl = l;
-		sprintf(hp->bodylen, "%d", l);
+		oprxbuf = hp->prxbuf;
+		do  {
+			hp->prxbuf = oprxbuf;
+			i = http_rxchar(hp, l, 1);
+			l -= i;
+			ll += i;
+			vtc_dump(hp->vl, 4, "body", hp->body, ll);
+		} while (i > 0 && l > 0);
+		hp->bodyl = ll;
+		sprintf(hp->bodylen, "%d", ll);
 		return;
 	}
 	p = http_find_header(hh, "transfer-encoding");
@@ -469,11 +496,13 @@ http_swallow_body(struct http *hp, char * const *hh, int body)
 	}
 	if (body) {
 		hp->body = hp->rxbuf + hp->prxbuf;
+		oprxbuf = hp->prxbuf;
 		do  {
-			i = http_rxchar(hp, 1, 1);
+			hp->prxbuf = oprxbuf;
+			i = http_rxchar(hp, -1, 1);
 			ll += i;
+			vtc_dump(hp->vl, 4, "rxeof", hp->body, ll);
 		} while (i > 0);
-		vtc_dump(hp->vl, 4, "rxeof", hp->body, ll);
 	}
 	hp->bodyl = ll;
 	sprintf(hp->bodylen, "%d", ll);
@@ -1057,7 +1086,7 @@ cmd_http_timeout(CMD_ARGS)
 }
 
 /**********************************************************************
- * expect other end to close (server only)
+ * expect other end to close
  */
 
 static void
