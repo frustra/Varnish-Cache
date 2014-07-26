@@ -559,6 +559,7 @@ struct busyobj {
 	struct pool_task	fetch_task;
 
 	char			*h_content_length;
+	ssize_t			adv_len;
 
 #define BO_FLAG(l, r, w, d) unsigned	l:1;
 #include "tbl/bo_flags.h"

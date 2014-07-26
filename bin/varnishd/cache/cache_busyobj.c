@@ -150,6 +150,9 @@ VBO_GetBusyObj(struct worker *wrk, const struct req *req)
 
 	bo->t_first = bo->t_prev = NAN;
 
+	bo->h_content_length = NULL;
+	bo->adv_len = 0;
+
 	return (bo);
 }
 

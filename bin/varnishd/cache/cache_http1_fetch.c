@@ -167,7 +167,6 @@ ssize_t
 V1F_Setup_Fetch(struct busyobj *bo)
 {
 	struct http_conn *htc;
-	ssize_t cl;
 
 	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
 	htc = &bo->htc;
@@ -179,9 +178,9 @@ V1F_Setup_Fetch(struct busyobj *bo)
 		VFP_Push(bo, v1f_pull_eof, 0);
 		return(-1);
 	case BS_LENGTH:
-		cl = vbf_fetch_number(bo->h_content_length, 10);
-		VFP_Push(bo, v1f_pull_straight, cl);
-		return (cl);
+		bo->adv_len = vbf_fetch_number(bo->h_content_length, 10);
+		VFP_Push(bo, v1f_pull_straight, bo->adv_len);
+		return (bo->adv_len);
 	case BS_CHUNKED:
 		VFP_Push(bo, v1f_pull_chunked, -1);
 		return (-1);

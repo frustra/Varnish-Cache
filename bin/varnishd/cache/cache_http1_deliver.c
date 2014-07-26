@@ -256,6 +256,19 @@ V1D_Deliver(struct req *req)
 			http_PrintfHeader(req->resp,
 			    "Content-Length: %zd", req->obj->len);
 		}
+	} else if (req->obj->objcore->busyobj->h_content_length &&
+		   ! req->obj->changed_gzip) {
+		/*
+		 * streaming a backend object with C-L - trust the backend - we
+		 * will re-check the written bytes later and close with
+		 * SC_RESP_SHORT if they don't match
+		 */
+		req->res_mode |= RES_LEN;
+		http_Unset(req->resp, H_Content_Length);
+		http_PrintfHeader(req->resp,
+		    "Content-Length: %zd", req->obj->objcore->busyobj->adv_len);
+		http_PrintfHeader(req->resp,
+		    "Content-Length-DEBUG-XXX: %zd", req->obj->len);
 	}
 
 	if (req->esi_level > 0) {
@@ -354,6 +367,19 @@ V1D_Deliver(struct req *req)
 	    (req->res_mode & RES_CHUNKED) &&
 	    !(req->res_mode & RES_ESI_CHILD))
 		WRW_EndChunk(req->wrk);
+
+	/* close connection if we announced a wrong c-l for unchunked writes */
+	if (req->wantbody &&
+	    req->res_mode & RES_LEN &&
+	    req->sp->fd >= 0) {
+		if (req->resp->status == 206) {
+			if (req->resp_bodybytes != (req->range_high - req->range_low))
+				SES_Close(req->sp, SC_RESP_SHORT);
+		} else {
+			if (req->resp_bodybytes != req->obj->len)
+				SES_Close(req->sp, SC_RESP_SHORT);
+		}
+	}
 
 	if ((V1D_FlushReleaseAcct(req) || ois != OIS_DONE) && req->sp->fd >= 0)
 		SES_Close(req->sp, SC_REM_CLOSE);
