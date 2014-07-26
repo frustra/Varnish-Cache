@@ -166,7 +166,6 @@ VBO_DerefBusyObj(struct worker *wrk, struct busyobj **pbo)
 	CHECK_OBJ_ORNULL(wrk, WORKER_MAGIC);
 	AN(pbo);
 	bo = *pbo;
-	*pbo = NULL;
 	CHECK_OBJ_NOTNULL(bo, BUSYOBJ_MAGIC);
 	CHECK_OBJ_ORNULL(bo->fetch_objcore, OBJCORE_MAGIC);
 	CHECK_OBJ_ORNULL(bo->fetch_obj, OBJECT_MAGIC);
@@ -174,13 +173,17 @@ VBO_DerefBusyObj(struct worker *wrk, struct busyobj **pbo)
 		oc = bo->fetch_objcore;
 		CHECK_OBJ_NOTNULL(oc, OBJCORE_MAGIC);
 		CHECK_OBJ_NOTNULL(oc->objhead, OBJHEAD_MAGIC);
+		if (oc->busyobj != NULL)
+			assert(oc->busyobj == bo);
 		Lck_Lock(&oc->objhead->mtx);
 		assert(bo->refcount > 0);
+		*pbo = NULL;
 		r = --bo->refcount;
 		Lck_Unlock(&oc->objhead->mtx);
 	} else {
 		Lck_Lock(&bo->mtx);
 		assert(bo->refcount > 0);
+		*pbo = NULL;
 		r = --bo->refcount;
 		Lck_Unlock(&bo->mtx);
 	}
