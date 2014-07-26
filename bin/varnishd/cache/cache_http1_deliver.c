@@ -281,8 +281,6 @@ V1D_Deliver(struct req *req)
 			http_Unset(req->resp, H_Content_Length);
 			http_PrintfHeader(req->resp,
 			    "Content-Length: %zd", bo->adv_len);
-			http_PrintfHeader(req->resp,
-			    "Content-Length-DEBUG-XXX: %zd", req->obj->len);
 		}
 
 		if (bo != NULL)
